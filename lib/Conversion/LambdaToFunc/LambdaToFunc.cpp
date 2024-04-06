@@ -1,6 +1,8 @@
 //
 // Created by Andrey Aralov on 3/31/24.
 //
+#include <ranges>
+
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/IRMapping.h>
@@ -64,27 +66,37 @@ LogicalResult LambdaToFunc::match( Operation *op ) const
     return success( llvm::isa<lambda::LambdaOp>( op ) );
 }
 
-void LambdaToFunc::rewrite( Operation *op, ArrayRef<Value>, ConversionPatternRewriter &rewriter ) const
+
+/// Given a lambda, returns corresponding function type (with capture added)
+FunctionType getLambdaFunctionType( lambda::LambdaOp op, ArrayRef<Value> operands, ConversionPatternRewriter& rewriter )
 {
-    auto lambdaOp = llvm::dyn_cast<lambda::LambdaOp>( op );
-    assert( lambdaOp && "Operation should be lambda" );
-    auto lambdaFuncType = lambdaOp.getProperties().functionType;
+    auto lambdaFuncType = op.getProperties().functionType;
+    llvm::SmallVector<Type> funcInputs;
+    std::ranges::copy( operands | std::views::transform( &Value::getType ), std::back_inserter( funcInputs ) );
+    std::ranges::copy( lambdaFuncType.getInputs(), std::back_inserter( funcInputs ) );
+    return rewriter.getFunctionType( funcInputs, lambdaFuncType.getResults() );
+}
 
+/// Makes a function in the current module, that corresponds to the lambda
+func::FuncOp makeLambdaFunction( lambda::LambdaOp op, ArrayRef<Value> operands, ConversionPatternRewriter& rewriter )
+{
     Operation* rootOp = op->getParentOfType<ModuleOp>();
-
-    assert( rootOp != nullptr && "Root op must exist" );
-    assert( rootOp != op && "Root op must be different from op" );
-    assert( rootOp->getRegions().size() == 1 && "Root must have one region" );
-    assert( rootOp->getRegion( 0 ).getBlocks().size() == 1 && "Root's region must have one block" );
-
     auto& baseBlock = *rootOp->getRegion( 0 ).getBlocks().begin();
 
     rewriter.setInsertionPointToStart( &baseBlock );
-    auto funcOp = rewriter.create<::mlir::func::FuncOp>( baseBlock.getParent()->getLoc(), "fff", lambdaFuncType );
-    rewriter.inlineRegionBefore( lambdaOp->getRegion( 0 ), funcOp.getBody(), funcOp.end() );
-
+    auto funcOp = rewriter.create<::mlir::func::FuncOp>( baseBlock.getParent()->getLoc(), "fff", getLambdaFunctionType( op, operands, rewriter ) );
+    rewriter.inlineRegionBefore( op.getRegion(), funcOp.getBody(), funcOp.end() );
     rewriter.setInsertionPoint( op );
-    auto newOp = rewriter.create<::mlir::func::ConstantOp>( op->getLoc(), op->getResultTypes(), FlatSymbolRefAttr::get( funcOp ) );
+    return funcOp;
+}
+
+
+void LambdaToFunc::rewrite( Operation *op, ArrayRef<Value> operands, ConversionPatternRewriter &rewriter ) const
+{
+    auto lambdaOp = llvm::dyn_cast<lambda::LambdaOp>( op );
+    assert( lambdaOp && "Operation should be lambda" );
+    auto funcOp = makeLambdaFunction( lambdaOp, operands, rewriter );
+    auto newOp = rewriter.create<::mlir::func::ConstantOp>( op->getLoc(), funcOp.getFunctionType(), FlatSymbolRefAttr::get( funcOp ) );
     rewriter.replaceOp( op, newOp );
 }
 

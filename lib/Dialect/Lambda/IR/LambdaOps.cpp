@@ -114,9 +114,25 @@ ArrayAttr LambdaOp::getCallableResAttrs()
 ParseResult LambdaOp::parse( OpAsmParser& parser,
                              OperationState& result )
 {
-//    llvm::SmallVector<OpAsmParser::UnresolvedOperand> capture;
-//    if ( parser.parseLess() || parser.parseOperandList( capture ) || parser.parseGreater() )
-//        return mlir::failure();
+    llvm::SmallVector<OpAsmParser::Argument> capture;
+    {
+        if ( parser.parseArgumentList( capture, AsmParser::Delimiter::LessGreater, true ) )
+            return mlir::failure();
+
+        llvm::SmallVector<OpAsmParser::UnresolvedOperand> operands;
+        llvm::SmallVector<Type> types;
+        for ( auto arg : capture )
+        {
+            operands.push_back( arg.ssaName );
+            types.push_back( arg.type );
+        }
+
+        llvm::SmallVector<Value> resolvedCapture;
+        if ( parser.resolveOperands( operands, types, parser.getCurrentLocation(), resolvedCapture ) )
+            return mlir::failure();
+
+        result.addOperands( resolvedCapture );
+    }
 
     llvm::SmallVector<OpAsmParser::Argument> args;
     llvm::SmallVector<Type> resultTypes;
@@ -129,14 +145,17 @@ ParseResult LambdaOp::parse( OpAsmParser& parser,
     for ( const auto& arg : args )
         argTypes.push_back( arg.type );
 
-    auto& functionType = result.getOrAddProperties<Properties>().functionType;
-    functionType = parser.getBuilder().getFunctionType( argTypes, resultTypes );
+    auto& props = result.getOrAddProperties<Properties>();
+    props.functionType = parser.getBuilder().getFunctionType( argTypes, resultTypes );
+
+    // add capture to the block
+    std::ranges::copy( capture, std::back_inserter( args ) );
 
     auto body = result.addRegion();
-    if ( parser.parseRegion( *body, args ) )
+    if ( parser.parseRegion( *body, args, true ) )
         return mlir::failure();
 
-    result.addTypes( functionType );
+    result.addTypes( props.functionType );
 
     return mlir::success();
 }

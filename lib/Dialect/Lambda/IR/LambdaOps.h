@@ -17,7 +17,6 @@ class LambdaOp : public Op
             < LambdaOp
             , OpTrait::OneRegion
             , OpTrait::OneResult
-            , OpTrait::ZeroOperands
             , OpTrait::IsIsolatedFromAbove
             , CallableOpInterface::Trait
             >
