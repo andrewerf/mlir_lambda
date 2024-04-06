@@ -70,11 +70,7 @@ void LambdaToFunc::rewrite( Operation *op, ArrayRef<Value>, ConversionPatternRew
     assert( lambdaOp && "Operation should be lambda" );
     auto lambdaFuncType = lambdaOp.getProperties().functionType;
 
-    Operation* rootOp = op;
-    while ( rootOp->getParentOp() != nullptr )
-    {
-        rootOp = rootOp->getParentOp();
-    }
+    Operation* rootOp = op->getParentOfType<ModuleOp>();
 
     assert( rootOp != nullptr && "Root op must exist" );
     assert( rootOp != op && "Root op must be different from op" );
