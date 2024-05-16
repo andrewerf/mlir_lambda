@@ -1,9 +1,12 @@
 //
 // Created by Andrey Aralov on 3/31/24.
 //
+#include <ranges>
+
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/FunctionImplementation.h>
 #include "LambdaOps.h"
+#include "Lambda.h"
 
 namespace mlir::lambda
 {
@@ -13,7 +16,7 @@ llvm::StringRef LambdaOp::getOperationName()
 { return "lambda.lambda"; }
 
 llvm::StringRef LambdaOp::getAttributeNames()
-{ return {}; }
+{ return { "function_type" }; }
 
 
 
@@ -155,9 +158,76 @@ ParseResult LambdaOp::parse( OpAsmParser& parser,
     if ( parser.parseRegion( *body, args, true ) )
         return mlir::failure();
 
-    result.addTypes( props.functionType );
+    {
+        llvm::SmallVector<Type> types;
+        types.push_back( props.functionType );
+        for ( auto arg : capture )
+            types.push_back( arg.type );
+        result.addTypes( LambdaType::get( types ) );
+    }
 
     return mlir::success();
+}
+
+llvm::StringRef MakeLambdaOp::getOperationName()
+{ return "lambda.make_lambda"; }
+
+llvm::StringRef MakeLambdaOp::getAttributeNames()
+{ return {}; }
+
+void MakeLambdaOp::build( mlir::OpBuilder& builder, mlir::OperationState& state, mlir::Value func, llvm::ArrayRef<Value> capture )
+{
+    state.addOperands( func );
+    state.addOperands( capture );
+
+    llvm::SmallVector<Type> types;
+    types.push_back( func.getType() );
+    for ( auto arg : capture )
+        types.push_back( arg.getType() );
+
+    state.addTypes( LambdaType::get( types ) );
+}
+
+
+
+llvm::StringRef CallOp::getOperationName()
+{ return "lambda.call"; }
+
+llvm::StringRef CallOp::getAttributeNames()
+{ return {}; }
+
+mlir::ParseResult CallOp::parse( mlir::OpAsmParser& parser, mlir::OperationState& result )
+{
+    OpAsmParser::UnresolvedOperand callee;
+    SmallVector<OpAsmParser::Argument> args;
+    Type lambdaType;
+
+    if ( parser.parseOperand( callee ) )
+        return failure();
+    if ( parser.parseArgumentList( args, OpAsmParser::Delimiter::Paren ) )
+        return failure();
+    if ( parser.parseColonType( lambdaType ) )
+        return failure();
+
+    if ( parser.resolveOperand( callee, lambdaType, result.operands ) )
+        return failure();
+
+    auto calleeType = llvm::dyn_cast<LambdaType>( lambdaType );
+    assert( calleeType && "Callee type must be lambda" );
+
+    auto funcType = dyn_cast<FunctionType>( calleeType.getElementTypes()[0] );
+    assert( funcType && "Expected function type" );
+
+    SmallVector<OpAsmParser::UnresolvedOperand> argOps;
+    for ( auto arg : args )
+        argOps.push_back( arg.ssaName );
+
+    if ( parser.resolveOperands( argOps, funcType.getInputs(), parser.getCurrentLocation(), result.operands ) )
+        return failure();
+
+    result.addTypes( funcType.getResults() );
+
+    return success();
 }
 
 

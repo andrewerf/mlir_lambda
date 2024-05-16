@@ -5,6 +5,9 @@
 
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/LLVMIR/LLVMTypes.h>
+#include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/IR/IRMapping.h>
 
 #include "LambdaToFunc.h"
@@ -91,13 +94,54 @@ func::FuncOp makeLambdaFunction( lambda::LambdaOp op, ArrayRef<Value> operands, 
 }
 
 
+LLVM::LLVMStructType makeLLVMStructType( lambda::LambdaOp op, ArrayRef<Value> operands, ConversionPatternRewriter& rewriter )
+{
+    auto funcType = getLambdaFunctionType( op, operands, rewriter );
+
+    llvm::SmallVector<Type> captureTypes;
+    captureTypes.push_back( funcType );
+    std::ranges::copy( operands | std::views::transform( &Value::getType ), std::back_inserter( captureTypes ) );
+
+    return LLVM::LLVMStructType::getLiteral( rewriter.getContext(), captureTypes );
+}
+
+
 void LambdaToFunc::rewrite( Operation *op, ArrayRef<Value> operands, ConversionPatternRewriter &rewriter ) const
 {
     auto lambdaOp = llvm::dyn_cast<lambda::LambdaOp>( op );
     assert( lambdaOp && "Operation should be lambda" );
+    auto loc = op->getLoc();
+
+    // function operation
     auto funcOp = makeLambdaFunction( lambdaOp, operands, rewriter );
-    auto newOp = rewriter.create<::mlir::func::ConstantOp>( op->getLoc(), funcOp.getFunctionType(), FlatSymbolRefAttr::get( funcOp ) );
-    rewriter.replaceOp( op, newOp );
+
+    // initial op is replaced with a function constant
+    auto makeFuncOp = rewriter.create<::mlir::func::ConstantOp>( loc, funcOp.getFunctionType(), FlatSymbolRefAttr::get( funcOp ) );
+    rewriter.replaceOp( op, makeFuncOp );
+
+    // result of the lambda creation (the SSA value)
+    Value value = makeFuncOp->getResult( 0 );
+
+    auto makeLambdaOp = rewriter.create<lambda::MakeLambdaOp>( loc, value, operands );
+
+    rewriter.replaceAllUsesWith( op->getResults(), makeLambdaOp->getResults() );
+
+//    // create a struct type and construct it as undef
+//    auto structType = makeLLVMStructType( lambdaOp, operands, rewriter );
+//    auto undefOp = rewriter.create<LLVM::UndefOp>( loc, structType );
+//
+//    Value undefOpValue = undefOp.getRes();
+//    undefOpValue.print( llvm::outs() );
+//
+//    // store function ptr
+//    rewriter.create<LLVM::InsertValueOp>( loc, structType, undefOpValue, value, rewriter.getDenseI64ArrayAttr( { 0 } ) );
+//
+//    // store operands (which represent the capture list) in the structure
+//    for ( auto val : operands )
+//    {
+////        rewriter.create<LLVM::InsertValueOp>( loc,  )
+//    }
+
 }
 
 
@@ -105,6 +149,8 @@ void LambdaLoweringPass::runOnOperation()
 {
     mlir::ConversionTarget target( getContext() );
     target.addLegalDialect<func::FuncDialect>();
+    target.addLegalOp<lambda::MakeLambdaOp>();
+    target.addLegalOp<lambda::CallOp>();
     target.addIllegalDialect<lambda::LambdaDialect>();
 
     mlir::RewritePatternSet patterns( &getContext() );

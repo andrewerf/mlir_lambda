@@ -6,6 +6,7 @@
 #include <mlir/IR/Operation.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h.inc>
 #include <mlir/Interfaces/CallInterfaces.h>
+#include <mlir/IR/FunctionInterfaces.h>
 #include <mlir/IR/OpImplementation.h>
 
 
@@ -57,6 +58,40 @@ public:
 
 };
 
+
+class MakeLambdaOp : public Op
+            < MakeLambdaOp
+            , OpTrait::AtLeastNOperands<1>::Impl
+            , OpTrait::OneResult
+            >
+{
+public:
+    using Op::Op;
+    using Op::print;
+    using Op::parse;
+
+    static llvm::StringRef getOperationName();
+    static llvm::StringRef getAttributeNames();
+
+    static void build( mlir::OpBuilder &builder, mlir::OperationState &state, mlir::Value func, llvm::ArrayRef<Value> capture );
+};
+
+
+class CallOp : public Op
+            < CallOp
+            , OpTrait::VariadicOperands
+            >
+{
+public:
+    using Op::Op;
+    using Op::print;
+
+    static llvm::StringRef getOperationName();
+    static llvm::StringRef getAttributeNames();
+
+    static mlir::ParseResult parse( OpAsmParser &parser,
+                                    OperationState &result );
+};
 
 
 class ReturnOp : public Op
