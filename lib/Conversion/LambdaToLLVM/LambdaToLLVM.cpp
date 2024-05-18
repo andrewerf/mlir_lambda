@@ -79,22 +79,29 @@ void MakeLambdaToLLVM::rewrite( mlir::Operation *op, ArrayRef<mlir::Value> opera
     assert( makeLambdaOp && "Operation should be lambda" );
     auto loc = op->getLoc();
 
-    // create a struct type and construct it as undef
-    auto structType = makeLLVMStructType( getTypeConverter(), makeLambdaOp, operands, rewriter );
-    auto undefOp = rewriter.create<LLVM::UndefOp>( loc, structType );
-
-    Value undefOpValue = undefOp.getRes();
-
-    Operation* updatedOp;
-
-    // store operands (which represent the callee and the capture list) in the structure
-    for ( auto [i, val] : std::views::enumerate( operands ) )
+    if ( operands.size() == 1 )
     {
-        auto top = rewriter.create<LLVM::InsertValueOp>( loc, structType, undefOpValue, val, rewriter.getDenseI64ArrayAttr( { i } ) );
-        undefOpValue = top.getRes();
-        updatedOp = top;
+        rewriter.replaceOp( op, operands[0] );
     }
-    rewriter.replaceOp( op, updatedOp );
+    else
+    {
+        // create a struct type and construct it as undef
+        auto structType = makeLLVMStructType( getTypeConverter(), makeLambdaOp, operands, rewriter );
+        auto undefOp = rewriter.create<LLVM::UndefOp>( loc, structType );
+
+        Value undefOpValue = undefOp.getRes();
+
+        Operation *updatedOp;
+
+        // store operands (which represent the callee and the capture list) in the structure
+        for ( auto [i, val]: std::views::enumerate( operands ) )
+        {
+            auto top = rewriter.create<LLVM::InsertValueOp>( loc, structType, undefOpValue, val, rewriter.getDenseI64ArrayAttr( {i} ) );
+            undefOpValue = top.getRes();
+            updatedOp = top;
+        }
+        rewriter.replaceOp( op, updatedOp );
+    }
 }
 
 
@@ -110,33 +117,44 @@ LogicalResult CallToLLVM::match( mlir::Operation *op ) const
 void CallToLLVM::rewrite( mlir::Operation *op, ArrayRef<mlir::Value> operands, mlir::ConversionPatternRewriter& rewriter ) const
 {
     auto callee = operands[0];
-    auto calleeType = llvm::dyn_cast<LLVM::LLVMStructType>( callee.getType() );
-    assert( calleeType );
     auto loc = op->getLoc();
 
+    if ( auto calleeType = llvm::dyn_cast<LLVM::LLVMStructType>( callee.getType() ) )
+    {
 //    auto calleeFuncType = llvm::dyn_cast<FunctionType>( calleeType.getBody()[0] );
 //    assert( calleeFuncType );
 
-    // extract capture to SSA values. First one is the function
-    auto loadFuncOp = rewriter.create<LLVM::ExtractValueOp>( loc, callee, rewriter.getDenseI64ArrayAttr( { 0 } ) );
-    auto funcVal = loadFuncOp.getRes();
+        // extract capture to SSA values. First one is the function
+        auto loadFuncOp = rewriter.create<LLVM::ExtractValueOp>( loc, callee, rewriter.getDenseI64ArrayAttr( {0} ) );
+        auto funcVal = loadFuncOp.getRes();
 
-    SmallVector<Value> args;
-    for ( int64_t i = 1; i < calleeType.getBody().size(); ++i )
-    {
-        auto loadArgOp = rewriter.create<LLVM::ExtractValueOp>( loc, callee, rewriter.getDenseI64ArrayAttr( { i } ) );
-        auto argVal = loadArgOp.getRes();
-        args.push_back( argVal );
+        SmallVector<Value> args;
+        for ( int64_t i = 1; i < calleeType.getBody().size(); ++i )
+        {
+            auto loadArgOp = rewriter.create<LLVM::ExtractValueOp>( loc, callee, rewriter.getDenseI64ArrayAttr( {i} ) );
+            auto argVal = loadArgOp.getRes();
+            args.push_back( argVal );
+        }
+
+        for ( int64_t i = 1; i < operands.size(); ++i )
+        {
+            args.push_back( operands[i] );
+        }
+
+        auto newOp = rewriter.create<func::CallIndirectOp>( loc, rewriter.getType<IntegerType>( 32 ), funcVal, args );
+        rewriter.replaceOp( op, newOp );
     }
-
-    for ( int64_t i = 1; i < operands.size(); ++i )
+    else
     {
-        args.push_back( operands[i] );
-    }
+        SmallVector<Value> args;
+        for ( int64_t i = 1; i < operands.size(); ++i )
+        {
+            args.push_back( operands[i] );
+        }
 
-    auto newOp = rewriter.create<func::CallIndirectOp>( loc, rewriter.getType<IntegerType>( 32 ), funcVal, args );
-    rewriter.replaceOp( op, newOp );
-    rewriter.replaceAllUsesWith( op->getResults(), newOp->getResults() );
+        auto callOp = rewriter.create<func::CallIndirectOp>( loc, rewriter.getType<IntegerType>( 32 ), callee, args );
+        rewriter.replaceOp( op, callOp );
+    }
 }
 
 

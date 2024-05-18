@@ -80,6 +80,12 @@ FunctionType getLambdaFunctionType( lambda::LambdaOp op, ArrayRef<Value> operand
     return rewriter.getFunctionType( funcInputs, lambdaFuncType.getResults() );
 }
 
+std::string getLambdaName()
+{
+    static int x = 0;
+    return "__lambda" + std::to_string( x++ );
+}
+
 /// Makes a function in the current module, that corresponds to the lambda
 func::FuncOp makeLambdaFunction( lambda::LambdaOp op, ArrayRef<Value> operands, ConversionPatternRewriter& rewriter )
 {
@@ -87,7 +93,7 @@ func::FuncOp makeLambdaFunction( lambda::LambdaOp op, ArrayRef<Value> operands, 
     auto& baseBlock = *rootOp->getRegion( 0 ).getBlocks().begin();
 
     rewriter.setInsertionPointToStart( &baseBlock );
-    auto funcOp = rewriter.create<::mlir::func::FuncOp>( baseBlock.getParent()->getLoc(), "fff", getLambdaFunctionType( op, operands, rewriter ) );
+    auto funcOp = rewriter.create<::mlir::func::FuncOp>( baseBlock.getParent()->getLoc(), getLambdaName(), getLambdaFunctionType( op, operands, rewriter ) );
     rewriter.inlineRegionBefore( op.getRegion(), funcOp.getBody(), funcOp.end() );
     rewriter.setInsertionPoint( op );
     return funcOp;
